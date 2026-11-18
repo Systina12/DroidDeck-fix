@@ -1639,19 +1639,9 @@ class SessionService : Service() {
             mainHandler.postDelayed(flushSteamGame, GAME_LAUNCH_RETRY_MS)
             return
         }
-        com.droiddeck.launcher.stores.StoreLaunchRequests.clearHostLaunch()
-        runCatching {
-            com.droiddeck.launcher.frontend.AddedGames.scan(this)
-                .firstOrNull { it.gameId.toString() == gameId || it.steamAppId?.toString() == gameId }
-                ?.let { selected ->
-                    val sidecar = com.droiddeck.launcher.stores.StoreGameSidecar.read(selected.folder)
-                    val store = sidecar?.store
-                    val storeId = sidecar?.id
-                    if (store != null && !storeId.isNullOrBlank()) {
-                        com.droiddeck.launcher.stores.StoreLaunchRequests.noteHostLaunch(store, storeId, gameId)
-                    }
-                }
-        }.onFailure { Log.w(TAG, "could not map Steam launch to store game", it) }
+        // Queue requests can also be induced by guest bridge operations.
+        // They may only preserve a permission already granted by the UI.
+        com.droiddeck.launcher.stores.StoreLaunchRequests.hostSteamGameQueued(gameId)
         pendingSteamGameId = null
         pendingSteamGameGeneration = -1
         pendingSteamGameExitWatchToken = -1

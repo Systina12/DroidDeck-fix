@@ -186,7 +186,10 @@ object StoreLaunch {
         val store = Store.byId(game.source)
         val id = game.storeId
         if (store == null || id == null) { onReady(); return }
-        prepare(context, store, id, onReady)
+        prepare(context, store, id, onReady = onReady)
+        // The Android library selected this concrete shortcut. A later Steam
+        // queue event can retain (but never create) this host-owned permission.
+        StoreLaunchRequests.noteHostLaunch(store, id, game.gameIdString)
     }
 }
 

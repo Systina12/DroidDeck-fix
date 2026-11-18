@@ -18,6 +18,8 @@ object StoreLaunchRequests {
     fun noteHostLaunch(store: Store, id: String, steamGameId: String? = null) =
         hostLaunch.record(store, id, steamGameId)
 
+    fun hostSteamGameQueued(gameId: String) = hostLaunch.steamGameQueued(gameId)
+
     fun finishHostSteamGame(gameId: String) = hostLaunch.finishSteamGame(gameId)
 
     fun clearHostLaunch() = hostLaunch.reset()

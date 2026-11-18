@@ -42,6 +42,14 @@ internal class StoreLaunchAuthorization(
         if (current?.let { it.store == store && it.id == id } == true) current = null
     }
 
+    /** A Steam launch request may also originate in the guest.
+     * It must never create a host permission; keep only a permission previously
+     * established by the Android library's Play action for this exact game.
+     */
+    @Synchronized fun steamGameQueued(gameId: String) {
+        if (current?.steamGameId != gameId) current = null
+    }
+
     @Synchronized fun finishSteamGame(gameId: String) {
         if (current?.steamGameId == gameId) current = null
     }

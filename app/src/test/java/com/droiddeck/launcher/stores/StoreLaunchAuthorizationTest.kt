@@ -12,6 +12,8 @@ class StoreLaunchAuthorizationTest {
         assertTrue(gate.allows(Store.EA, "ea-one"))
         assertFalse(gate.allows(Store.EA, "ea-two"))
         assertFalse(gate.allows(Store.UBISOFT, "ea-one"))
+        gate.steamGameQueued("1234")
+        assertTrue(gate.allows(Store.EA, "ea-one"))
         gate.finishSteamGame("9999")
         assertTrue(gate.allows(Store.EA, "ea-one"))
         gate.finishSteamGame("1234")
@@ -27,6 +29,9 @@ class StoreLaunchAuthorizationTest {
         assertTrue(gate.allows(Store.ROCKSTAR, "r1"))
         gate.finish(Store.ROCKSTAR, "r1")
         assertFalse(gate.allows(Store.ROCKSTAR, "r1"))
+        gate.record(Store.EPIC, "e1")
+        gate.steamGameQueued("untrusted-guest-queue")
+        assertFalse(gate.allows(Store.EPIC, "e1"))
         gate.record(Store.EPIC, "e1")
         now += 12L * 60 * 60 * 1000
         assertFalse(gate.allows(Store.EPIC, "e1"))
