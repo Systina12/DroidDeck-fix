@@ -185,6 +185,15 @@ class EaTest {
         assertFalse(other.mayTrust)
     }
 
+    @Test fun lsxAuthCodeCannotChooseArbitraryOAuthClientsOrScopes() {
+        assertFalse(EaLsx.authCodeAllowed("unknown-client", "signin"))
+        assertFalse(EaLsx.authCodeAllowed(EaAuth.CLIENT_ID, ""))
+        assertFalse(EaLsx.authCodeAllowed(EaAuth.CLIENT_ID, "signin admin"))
+        assertFalse(EaLsx.authCodeAllowed(EaAuth.CLIENT_ID, "external.social_information_ups_admin"))
+        assertTrue(EaLsx.authCodeAllowed(EaAuth.CLIENT_ID, "signin"))
+        assertTrue(EaLsx.authCodeAllowed(EaAuth.CLIENT_ID, "signin service.atom"))
+    }
+
     @Test fun aSessionFromAnOlderLaunchCannotBecomeTrusted() {
         val old = EaLsx.Session(java.net.Socket(), java.io.ByteArrayOutputStream(), true)
         EaLsx.generation++

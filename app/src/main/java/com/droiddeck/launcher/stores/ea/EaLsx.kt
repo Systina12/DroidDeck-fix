@@ -63,7 +63,7 @@ object EaLsx {
         fun authCode(clientId: String, scope: String?): String?
         fun license(contentId: String, requestTicket: String, ticketEngine: String): String?
         fun entitlements(group: String): List<Map<String, String>>
-        fun token(): String?
+
     }
 
     @Volatile var game: Game? = null
@@ -331,6 +331,22 @@ object EaLsx {
         return if (body == null) "<$name$a/>" else "<$name$a>$body</$name>"
     }
 
+    /**
+     * EA's local SDK protocol has no authenticated peer identity. Constrain
+     * OAuth code issuance to the launcher's own EA client and explicit narrow
+     * scopes instead of letting a loopback client choose any OAuth app/scope.
+     *
+     * This is defense-in-depth: it does not authenticate the process claiming
+     * the public ContentId.
+     */
+    internal fun authCodeAllowed(clientId: String, scope: String): Boolean {
+        if (clientId != EaAuth.CLIENT_ID || scope.isBlank()) return false
+        val requested = scope.split(' ').filter { it.isNotBlank() }.toSet()
+        return requested.isNotEmpty() && requested.all { it in AUTH_CODE_SCOPES }
+    }
+
+    private val AUTH_CODE_SCOPES = setOf("signin", "service.atom", "dp.client.default")
+
     private fun now() = LocalDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
 
     private fun answer(session: Session, m: Message): String? {
@@ -384,8 +400,17 @@ object EaLsx {
                 "AreChunksInstalledResponse", "ItemId" to m.attrs["ItemId"].orEmpty(), "Installed" to true,
                 body = m.children.joinToString("") { tag(it.first, body = esc(it.second)) },
             )
-            "GetAuthCode" -> tag("AuthCode", "value" to (who?.takeIf { session.trusted }?.authCode(m.attrs["ClientId"].orEmpty(), m.attrs["Scope"])?.takeIf { session.trusted } ?: "invalid"))
-            "GetAuthToken" -> tag("AuthToken", "value" to if (!session.trusted) "" else (g?.validToken ?: who?.token().orEmpty()))
+            "GetAuthCode" -> {
+                val clientId = m.attrs["ClientId"].orEmpty()
+                val scope = m.attrs["Scope"].orEmpty()
+                val permitted = session.trusted && authCodeAllowed(clientId, scope)
+                tag("AuthCode", "value" to if (permitted) {
+                    who?.authCode(clientId, scope)?.takeIf { session.trusted } ?: "invalid"
+                } else "invalid")
+            }
+            // The prepared game already has its launch-scoped token. Never mint a
+            // fresh four-hour account token in response to a loopback request.
+            "GetAuthToken" -> tag("AuthToken", "value" to if (session.trusted) g?.validToken.orEmpty() else "")
             "RequestLicense" -> {
                 val token = who?.takeIf { session.trusted }?.license(g?.contentId.orEmpty(), m.attrs["RequestTicket"].orEmpty(), m.attrs["TicketEngine"].orEmpty())?.takeIf { session.trusted }.orEmpty()
                 tag("RequestLicenseResponse", "License" to token)
@@ -432,8 +457,6 @@ object EaLsx {
                 EaOoa.request(token, contentId, EaOoa.machineHash(hw, g.hashVersion), requestTicket.ifEmpty { null }, ticketEngine.ifEmpty { null }).gameToken
             }.onFailure { Log.w(TAG, "licence: ${it.message}") }.getOrNull()
         }
-
-        override fun token(): String? = EaAuth.mint(app, EaAuth.CLIENT_ID, "token", EaAuth.OPAQUE_SCOPES, "OPAQUE", 14400)
 
         override fun entitlements(group: String): List<Map<String, String>> {
             val token = EaAuth.accessToken(app) ?: return emptyList()
