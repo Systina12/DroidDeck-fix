@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.FileObserver
 import android.util.Log
 import com.droiddeck.launcher.runtime.LinuxRuntime
+import com.droiddeck.launcher.stores.ea.EaLaunch
+import com.droiddeck.launcher.stores.ea.EaLsx
 import java.io.File
 import org.json.JSONObject
 
@@ -12,7 +14,9 @@ object StoreLaunchRequests {
     private val lock = Any()
     private var observer: FileObserver? = null
 
-    private val hostLaunch = StoreLaunchAuthorization()
+    private val hostLaunch = StoreLaunchAuthorization(onRevoked = { launch ->
+        if (launch.store == Store.EA) EaLsx.stop(launch.id)
+    })
 
     /** Called only from host-controlled game launch paths, never from guest requests. */
     fun noteHostLaunch(store: Store, id: String, steamGameId: String? = null) =
@@ -36,9 +40,7 @@ object StoreLaunchRequests {
             observer?.stopWatching()
             val root = dir(app)
             root.deleteRecursively()
-            // StoreLaunch.prepare() may run immediately before SessionService
-            // starts the guest; preserve that host-issued launch grant here.
-            // stop() and the grant's lifetime handle stale permissions.
+            // The host may authorize the game before starting the guest.
             val req = File(root, "req").apply { mkdirs() }
             File(root, "resp").mkdirs()
             @Suppress("DEPRECATION")
@@ -54,7 +56,6 @@ object StoreLaunchRequests {
 
     fun stop() {
         com.droiddeck.launcher.stores.xbox.XboxRuntime.stop()
-        com.droiddeck.launcher.stores.ea.EaLsx.stop()
         synchronized(lock) {
             observer?.stopWatching()
             observer = null
@@ -86,19 +87,15 @@ object StoreLaunchRequests {
                 }
             "ea-prepare" -> runCatching {
                 val id = request.optString("id")
-                if (!launched(Store.EA, id)) JSONObject().put("ok", false).put("reason", "not-launched")
-                else com.droiddeck.launcher.stores.ea.EaLaunch.prepare(app, request)
+                val launch = hostLaunch.grant(Store.EA, id)
+                val prepared = launch?.let {
+                    val result = EaLaunch.prepare(app, request) { publish -> hostLaunch.withGrant(launch, publish) }
+                    hostLaunch.withGrant(launch) { result }
+                }
+                prepared ?: JSONObject().put("ok", false).put("reason", "not-launched")
             }
                 .getOrElse { JSONObject().put("ok", false).put("reason", "error-" + it.javaClass.simpleName) }
-            "ea-exited" -> {
-                val id = request.optString("id")
-                val allowed = launched(Store.EA, id)
-                if (allowed) {
-                    com.droiddeck.launcher.stores.ea.EaLsx.stop(id)
-                    hostLaunch.finish(Store.EA, id)
-                }
-                JSONObject().put("ok", allowed)
-            }
+            "ea-exited" -> JSONObject().put("ok", hostLaunch.finish(Store.EA, request.optString("id")))
             "gog-achievements" -> runCatching {
                 val id = request.optString("id")
                 if (!launched(Store.GOG, id)) JSONObject().put("ok", false).put("ready", false).put("reason", "not-launched")
@@ -124,12 +121,7 @@ object StoreLaunchRequests {
                 if (com.droiddeck.launcher.session.SessionFiles.awaitStoreService(app, request.optString("store"), root)) JSONObject().put("ok", true)
                 else JSONObject().put("ok", false).put("reason", "service-unavailable")
             }.getOrElse { JSONObject().put("ok", false).put("reason", "error-" + it.javaClass.simpleName) }
-            "rockstar-exited" -> {
-                val id = request.optString("id")
-                val allowed = launched(Store.ROCKSTAR, id)
-                if (allowed) hostLaunch.finish(Store.ROCKSTAR, id)
-                JSONObject().put("ok", allowed)
-            }
+            "rockstar-exited" -> JSONObject().put("ok", hostLaunch.finish(Store.ROCKSTAR, request.optString("id")))
             "ubisoft-launch" -> {
                 val id = request.optString("id")
                 if (id.isEmpty()) JSONObject().put("ok", false).put("reason", "no-id")

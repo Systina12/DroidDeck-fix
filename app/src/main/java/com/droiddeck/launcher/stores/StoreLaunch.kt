@@ -140,7 +140,6 @@ object StoreLaunch {
     }
 
     fun prepare(context: Context, store: Store, id: String, onReady: () -> Unit) {
-        StoreLaunchRequests.noteHostLaunch(store, id)
         if (store != Store.EPIC) { onReady(); return }
         val app = context.applicationContext
         Thread({
@@ -186,10 +185,7 @@ object StoreLaunch {
         val store = Store.byId(game.source)
         val id = game.storeId
         if (store == null || id == null) { onReady(); return }
-        prepare(context, store, id, onReady = onReady)
-        // The Android library selected this concrete shortcut. A later Steam
-        // queue event can retain (but never create) this host-owned permission.
-        StoreLaunchRequests.noteHostLaunch(store, id, game.gameIdString)
+        prepare(context, store, id, onReady)
     }
 }
 

@@ -963,14 +963,21 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
         }
     }
 
-    private fun launchGame(game: Library.SteamGame, returnHome: Boolean = false, onHandled: () -> Unit = {}): Boolean {
+    private fun launchGame(
+        game: Library.SteamGame,
+        returnHome: Boolean = false,
+        authorizeStore: Boolean = false,
+        onHandled: () -> Unit = {},
+    ): Boolean {
         if (!SessionPrefs.soundtracksIngame(this)) com.droiddeck.launcher.playback.SoundtrackController.pause(this)
         if (pkgStage != null) {
             onHandled()
             android.widget.Toast.makeText(this, R.string.main_wait_install_game, android.widget.Toast.LENGTH_SHORT).show()
             return false
         }
-        if (com.droiddeck.launcher.session.NoSteamLaunch.enabled(this, game)) return launchWithoutSteam(game, returnHome, onHandled)
+        if (com.droiddeck.launcher.session.NoSteamLaunch.enabled(this, game)) {
+            return launchWithoutSteam(game, returnHome, authorizeStore, onHandled)
+        }
         onHandled()
         if (SessionState.running) {
             if (SessionState.mode != SessionService.MODE_STEAM || SessionState.stopRequested) {
@@ -982,6 +989,7 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
                 android.widget.Toast.makeText(this, R.string.game_link_failed, android.widget.Toast.LENGTH_LONG).show()
                 return false
             }
+            if (authorizeStore) grantStoreLaunch(game.source, game.storeId, game.gameIdString)
             Library.recordPlayed(this, game)
             startActivity(Intent(this, SessionActivity::class.java).setAction(SessionService.ACTION_RESUME)
                 .putExtra(SessionActivity.EXTRA_STEAMVR, steamVr)
@@ -999,11 +1007,21 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
                             com.droiddeck.launcher.frontend.GameLaunchLink.steamUrl(game.gameIdString))
                     }
                 }
-                .playing(game), steamSession = true)
+                .playing(game, authorizeStore), steamSession = true)
     }
 
-    private fun Intent.playing(game: Library.SteamGame): Intent =
-        apply { if (game.library == Library.ADDED) putExtra(SessionActivity.EXTRA_PLAYED_GAME, game.gameIdString) }
+    private fun Intent.playing(game: Library.SteamGame, authorizeStore: Boolean = false): Intent = apply {
+        if (game.library == Library.ADDED) putExtra(SessionActivity.EXTRA_PLAYED_GAME, game.gameIdString)
+        if (authorizeStore) {
+            putExtra(EXTRA_APPROVED_STORE, game.source)
+            putExtra(EXTRA_APPROVED_STORE_ID, game.storeId)
+        }
+    }
+
+    private fun grantStoreLaunch(source: String?, id: String?, gameId: String?) {
+        val store = com.droiddeck.launcher.stores.Store.byId(source) ?: return
+        if (id != null) com.droiddeck.launcher.stores.StoreLaunchRequests.noteHostLaunch(store, id, gameId)
+    }
 
     private fun recordPlayed(intent: Intent) {
         intent.getStringExtra(SessionActivity.EXTRA_PLAYED_GAME)?.let { Library.recordPlayed(this, it) }
@@ -1015,7 +1033,12 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
             .apply { if (returnHome) putExtra(SessionActivity.EXTRA_LINK_TASK, task) }
     }
 
-    private fun launchWithoutSteam(game: Library.SteamGame, returnHome: Boolean, onHandled: () -> Unit = {}): Boolean {
+    private fun launchWithoutSteam(
+        game: Library.SteamGame,
+        returnHome: Boolean,
+        authorizeStore: Boolean = false,
+        onHandled: () -> Unit = {},
+    ): Boolean {
         val app = applicationContext
         Thread({
             val added = if (com.droiddeck.launcher.session.NoSteamLaunch.needsAddedGame(game)) runCatching { com.droiddeck.launcher.session.NoSteamLaunch.addedGame(app, game) }.getOrNull() else null
@@ -1034,7 +1057,7 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
                     .putExtra(SessionService.EXTRA_PROGRAM, command.program)
                     .putExtra(SessionService.EXTRA_PROGRAM_ARGS, command.args.toTypedArray())
                     .putExtra(SessionService.EXTRA_GAME_ID, com.droiddeck.launcher.session.NoSteamLaunch.scope(game))
-                    .playing(game)
+                    .playing(game, authorizeStore)
                 when {
                     !SessionState.running -> startSessionOrWait(next)
                     SessionState.stopRequested -> android.widget.Toast.makeText(this, R.string.game_link_session_busy, android.widget.Toast.LENGTH_LONG).show()
@@ -1184,19 +1207,24 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
             if (!isDestroyed && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) syncDualPanel()
         }, LINK_PANEL_MS)
         val game = games.firstOrNull { it.gameIdString == id }
-        if (game == null) {
-            pendingGameLink = null
-            intent.data = null
-            intent.action = Intent.ACTION_MAIN
-            intent.removeExtra(GameLaunchIntent.EXTRA_APP_ID)
-            syncDualPanel()
-            android.widget.Toast.makeText(this, R.string.game_link_missing, android.widget.Toast.LENGTH_LONG).show()
-        } else if (launchGame(game, returnHome = true)) {
-            pendingGameLink = null
-            intent.data = null
-            intent.action = Intent.ACTION_MAIN
-            intent.removeExtra(GameLaunchIntent.EXTRA_APP_ID)
+        when {
+            game == null -> {
+                android.widget.Toast.makeText(this, R.string.game_link_missing, android.widget.Toast.LENGTH_LONG).show()
+            }
+            game.storeId != null && com.droiddeck.launcher.stores.Store.byId(game.source) != null -> {
+                android.app.AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.game_link_confirm_store, game.name))
+                    .setPositiveButton(android.R.string.ok) { _, _ -> prepareAndLaunch(game, game.launchKey, returnHome = true) }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+            else -> if (!launchGame(game, returnHome = true)) return
         }
+        pendingGameLink = null
+        intent.data = null
+        intent.action = Intent.ACTION_MAIN
+        intent.removeExtra(GameLaunchIntent.EXTRA_APP_ID)
+        syncDualPanel()
     }
 
     private fun chooseGameShortcut(game: Library.SteamGame) {
@@ -2150,14 +2178,15 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
         if (Build.VERSION.SDK_INT >= 33) state.getParcelable(key, Intent::class.java)
         else @Suppress("DEPRECATION") state.getParcelable(key)
 
-    private fun prepareAndLaunch(g: Library.SteamGame, key: String) {
+    private fun prepareAndLaunch(g: Library.SteamGame, key: String, returnHome: Boolean = false) {
         val request = gameLaunchRequest.incrementAndGet()
         val done = { preparingGames = preparingGames - key }
         com.droiddeck.launcher.frontend.AutoComponents.beforeLaunch(this, g, onBlocked = done) {
             if (request != gameLaunchRequest.get() || isFinishing || isDestroyed) { done(); return@beforeLaunch }
             com.droiddeck.launcher.stores.StoreLaunch.prepare(this, g) {
-                if (request == gameLaunchRequest.get() && !isFinishing && !isDestroyed) launchGame(g, onHandled = done)
-                else done()
+                if (request == gameLaunchRequest.get() && !isFinishing && !isDestroyed) {
+                    launchGame(g, returnHome, authorizeStore = true, onHandled = done)
+                } else done()
             }
         }
     }
@@ -3248,6 +3277,11 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
         val warn = installed == null && !com.droiddeck.launcher.core.DeviceSupport.canDraw(this)
         if (warn && available != null) { showNonAdreno = available; return false }
         startActivity(intent)
+        grantStoreLaunch(
+            intent.getStringExtra(EXTRA_APPROVED_STORE),
+            intent.getStringExtra(EXTRA_APPROVED_STORE_ID),
+            intent.getStringExtra(SessionActivity.EXTRA_PLAYED_GAME),
+        )
         return true
     }
 
@@ -3375,6 +3409,8 @@ class FrontEndActivity : ComponentActivity(), com.droiddeck.launcher.ui.AgentPet
     }
 
     companion object {
+        private const val EXTRA_APPROVED_STORE = "approvedStore"
+        private const val EXTRA_APPROVED_STORE_ID = "approvedStoreId"
         private const val STATE_HOME_CHOICE_OPEN = "home_choice_open"
         private const val KEY_PENDING_SESSION_LOG_EXPORT = "pending_session_log_export"
         private const val STATE_GAME_SPACE_OFFERED = "game_space_offered"

@@ -1701,6 +1701,7 @@ class SessionService : Service() {
 
                             if (previousGameId != null && steamGameRunning(previousGameId)) {
                                 Log.w(TAG, "game $gameId did not start; restoring previous game $previousGameId")
+                                com.droiddeck.launcher.stores.StoreLaunchRequests.finishHostSteamGame(gameId)
                                 SessionState.gameId = previousGameId
                                 val previousProfileId =
                                     SessionPrefs.screenEffectsProfileId(MODE_STEAM, previousGameId, null)

@@ -40,4 +40,31 @@ class StoreLaunchAuthorizationTest {
         gate.reset()
         assertFalse(gate.allows(Store.EPIC, "e1"))
     }
+
+    @Test fun replacingAnEaLaunchRevokesItsGrantEvenWhenTheGameIsTheSame() {
+        val revoked = mutableListOf<StoreLaunchAuthorization.Launch>()
+        val gate = StoreLaunchAuthorization(onRevoked = { revoked.add(it) }, nowMillis = { 1000L })
+        gate.record(Store.EA, "ea-one", "1234")
+        val first = gate.grant(Store.EA, "ea-one")!!
+
+        gate.record(Store.EA, "ea-one", "1234")
+        val second = gate.grant(Store.EA, "ea-one")!!
+        assertEquals(listOf(first), revoked)
+        assertNull(gate.withGrant(first) { error("Revoked grant may not open LSX") })
+        assertEquals("ready", gate.withGrant(second) { "ready" })
+
+        gate.finishSteamGame("1234")
+        assertEquals(listOf(first, second), revoked)
+    }
+
+    @Test fun expiredGrantRunsCleanupWhenTheGameExits() {
+        var now = 1000L
+        val revoked = mutableListOf<String>()
+        val gate = StoreLaunchAuthorization(onRevoked = { revoked.add(it.id) }, nowMillis = { now })
+        gate.record(Store.EA, "ea-one")
+
+        now += 12L * 60 * 60 * 1000
+        assertFalse(gate.finish(Store.EA, "ea-one"))
+        assertEquals(listOf("ea-one"), revoked)
+    }
 }

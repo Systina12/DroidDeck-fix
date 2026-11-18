@@ -71,7 +71,7 @@ object EaLaunch {
     }
 
     /** Answers the guest's request right before an EA game starts: session, licence and the LSX endpoint. */
-    fun prepare(context: Context, request: JSONObject): JSONObject {
+    fun prepare(context: Context, request: JSONObject, publish: (() -> Boolean) -> Boolean?): JSONObject {
         val app = context.applicationContext
         val id = request.optString("id")
         val reply = JSONObject().put("ok", false)
@@ -91,12 +91,16 @@ object EaLaunch {
         val lifetime = if (legacy) 14400 else 550
         val opaque = EaAuth.mint(app, EaAuth.CLIENT_ID, "token", EaAuth.OPAQUE_SCOPES, "OPAQUE", lifetime).orEmpty()
         val known = (sidecar.extra["contentIds"].orEmpty().split(',') + sidecar.extra["multiplayerId"].orEmpty()).map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-        val lsx = EaLsx.start(app, EaLsx.Game(id, contentId, sidecar.title, sidecar.installVersion, locale, hardware, hashVersion, opaque,
-            System.currentTimeMillis() + (lifetime - 30) * 1000L, known))
+        val game = EaLsx.Game(id, contentId, sidecar.title, sidecar.installVersion, locale, hardware, hashVersion, opaque,
+            System.currentTimeMillis() + (lifetime - 30) * 1000L, known)
         val env = environment(id, contentId, locale, if (legacy && opaque.isNotEmpty()) opaque else access, access, opaque, EaAuth.load(app) ?: account)
-        val tmp = File(folder, "$ENV_FILE.tmp")
-        tmp.writeText(env.entries.joinToString("\r\n", postfix = "\r\n") { "${it.key}=${it.value}" })
-        tmp.renameTo(File(folder, ENV_FILE))
+        val lsx = publish {
+            val listening = EaLsx.start(app, game)
+            val tmp = File(folder, "$ENV_FILE.tmp")
+            tmp.writeText(env.entries.joinToString("\r\n", postfix = "\r\n") { "${it.key}=${it.value}" })
+            tmp.renameTo(File(folder, ENV_FILE))
+            listening
+        } ?: return reply.put("reason", "not-launched")
 
         val licenses = JSONArray()
         val notes = ArrayList<String>()

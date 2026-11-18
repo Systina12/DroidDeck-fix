@@ -8,9 +8,10 @@ package com.droiddeck.launcher.stores
  * notification is missed, and is revoked on the matching game exit.
  */
 internal class StoreLaunchAuthorization(
+    private val onRevoked: (Launch) -> Unit = {},
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
-    private data class Launch(
+    class Launch(
         val store: Store,
         val id: String,
         val steamGameId: String?,
@@ -20,26 +21,34 @@ internal class StoreLaunchAuthorization(
 
     @Synchronized fun record(store: Store, id: String, steamGameId: String? = null) {
         if (id.isBlank()) return
+        reset()
         current = Launch(store, id, steamGameId, nowMillis())
     }
 
-    @Synchronized fun allows(store: Store, id: String): Boolean {
-        val launch = current ?: return false
+    private fun liveLaunch(): Launch? {
+        val launch = current ?: return null
         val elapsed = nowMillis() - launch.atMillis
         if (elapsed < 0 || elapsed >= MAX_AGE_MS) {
-            current = null
-            return false
+            reset()
+            return null
         }
-        return launch.store == store && launch.id == id
+        return launch
     }
 
-    @Synchronized fun activeStore(): Store? {
-        val launch = current ?: return null
-        return launch.store.takeIf { allows(launch.store, launch.id) }
-    }
+    @Synchronized fun grant(store: Store, id: String): Launch? =
+        liveLaunch()?.takeIf { it.store == store && it.id == id }
 
-    @Synchronized fun finish(store: Store, id: String) {
-        if (current?.let { it.store == store && it.id == id } == true) current = null
+    fun allows(store: Store, id: String): Boolean = grant(store, id) != null
+
+    @Synchronized fun <T : Any> withGrant(launch: Launch, action: () -> T): T? =
+        if (liveLaunch() === launch) action() else null
+
+    @Synchronized fun activeStore(): Store? = liveLaunch()?.store
+
+    @Synchronized fun finish(store: Store, id: String): Boolean {
+        if (grant(store, id) == null) return false
+        reset()
+        return true
     }
 
     /** A Steam launch request may also originate in the guest.
@@ -47,14 +56,18 @@ internal class StoreLaunchAuthorization(
      * established by the Android library's Play action for this exact game.
      */
     @Synchronized fun steamGameQueued(gameId: String) {
-        if (current?.steamGameId != gameId) current = null
+        if (current?.steamGameId != gameId) reset()
     }
 
     @Synchronized fun finishSteamGame(gameId: String) {
-        if (current?.steamGameId == gameId) current = null
+        if (current?.steamGameId == gameId) reset()
     }
 
-    @Synchronized fun reset() { current = null }
+    @Synchronized fun reset() {
+        val previous = current ?: return
+        current = null
+        onRevoked(previous)
+    }
 
     companion object {
         private const val MAX_AGE_MS = 12L * 60 * 60 * 1000
