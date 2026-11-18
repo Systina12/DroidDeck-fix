@@ -140,6 +140,7 @@ object StoreLaunch {
     }
 
     fun prepare(context: Context, store: Store, id: String, onReady: () -> Unit) {
+        StoreLaunchRequests.noteHostLaunch(store, id)
         if (store != Store.EPIC) { onReady(); return }
         val app = context.applicationContext
         Thread({

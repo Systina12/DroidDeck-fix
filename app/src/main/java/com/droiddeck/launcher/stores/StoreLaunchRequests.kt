@@ -12,7 +12,19 @@ object StoreLaunchRequests {
     private val lock = Any()
     private var observer: FileObserver? = null
 
-    @Volatile var lastLaunched: Pair<Store, String>? = null
+    private val hostLaunch = StoreLaunchAuthorization()
+
+    /** Called only from host-controlled game launch paths, never from guest requests. */
+    fun noteHostLaunch(store: Store, id: String, steamGameId: String? = null) =
+        hostLaunch.record(store, id, steamGameId)
+
+    fun finishHostSteamGame(gameId: String) = hostLaunch.finishSteamGame(gameId)
+
+    fun clearHostLaunch() = hostLaunch.reset()
+
+    fun hostLaunchStore(): Store? = hostLaunch.activeStore()
+
+    private fun launched(store: Store, id: String) = hostLaunch.allows(store, id)
 
     fun dir(context: Context) = File(LinuxRuntime.sessionRoot(context), "stores")
 
@@ -22,7 +34,7 @@ object StoreLaunchRequests {
             observer?.stopWatching()
             val root = dir(app)
             root.deleteRecursively()
-            lastLaunched = null
+            hostLaunch.reset()
             val req = File(root, "req").apply { mkdirs() }
             File(root, "resp").mkdirs()
             @Suppress("DEPRECATION")
@@ -42,6 +54,7 @@ object StoreLaunchRequests {
         synchronized(lock) {
             observer?.stopWatching()
             observer = null
+            hostLaunch.reset()
         }
     }
 
@@ -57,32 +70,50 @@ object StoreLaunchRequests {
                 JSONObject().put("ok", true)
             }
             "xbox-renew" -> JSONObject().put("ok", com.droiddeck.launcher.stores.xbox.XboxRuntime.renew(app, request.optString("id"), request.optString("lease")))
-            "xbox-prepare" -> runCatching { com.droiddeck.launcher.stores.xbox.XboxRuntime.prepare(app, request.getString("id")) }
+            "xbox-prepare" -> runCatching {
+                val id = request.getString("id")
+                if (!launched(Store.XBOX, id)) JSONObject().put("ok", false).put("reason", "not-launched")
+                else com.droiddeck.launcher.stores.xbox.XboxRuntime.prepare(app, id)
+            }
                 .getOrElse {
                     StoresState.logLine("Xbox: launch prepare failed (${it.javaClass.simpleName}: ${it.message})")
                     val reason = (it as? IllegalStateException)?.message ?: "Xbox account service is unavailable. Sign in again and retry."
                     JSONObject().put("ok", false).put("reason", reason)
                 }
-            "ea-prepare" -> runCatching { lastLaunched = Store.EA to request.optString("id"); com.droiddeck.launcher.stores.ea.EaLaunch.prepare(app, request) }
+            "ea-prepare" -> runCatching {
+                val id = request.optString("id")
+                if (!launched(Store.EA, id)) JSONObject().put("ok", false).put("reason", "not-launched")
+                else com.droiddeck.launcher.stores.ea.EaLaunch.prepare(app, request)
+            }
                 .getOrElse { JSONObject().put("ok", false).put("reason", "error-" + it.javaClass.simpleName) }
             "ea-exited" -> {
-                com.droiddeck.launcher.stores.ea.EaLsx.stop(request.optString("id"))
-                JSONObject().put("ok", true)
+                val id = request.optString("id")
+                val allowed = launched(Store.EA, id)
+                if (allowed) {
+                    com.droiddeck.launcher.stores.ea.EaLsx.stop(id)
+                    hostLaunch.finish(Store.EA, id)
+                }
+                JSONObject().put("ok", allowed)
             }
-            "gog-achievements" -> runCatching { com.droiddeck.launcher.stores.gog.GogComet.prepare(app, request.optString("id")) }
+            "gog-achievements" -> runCatching {
+                val id = request.optString("id")
+                if (!launched(Store.GOG, id)) JSONObject().put("ok", false).put("ready", false).put("reason", "not-launched")
+                else com.droiddeck.launcher.stores.gog.GogComet.prepare(app, id)
+            }
                 .getOrElse { JSONObject().put("ok", false).put("ready", false).put("reason", "service-unavailable") }
             "epic-code" -> {
                 val id = request.optString("id")
                 if (id.isEmpty()) JSONObject().put("ok", false).put("reason", "no-id")
+                else if (!launched(Store.EPIC, id)) JSONObject().put("ok", false).put("reason", "not-launched")
                 else {
-                    lastLaunched = Store.EPIC to id
                     val code = StoreLaunch.epicCode(app, id)
                     JSONObject().put("ok", true).put("code", code.written).put("reason", code.reason)
                 }
             }
             "rockstar-launch" -> runCatching {
-                lastLaunched = Store.ROCKSTAR to request.optString("id")
-                com.droiddeck.launcher.stores.rockstar.RockstarLaunch.prepare(app, request.optString("id"))
+                val id = request.optString("id")
+                if (!launched(Store.ROCKSTAR, id)) JSONObject().put("ok", false).put("reason", "not-launched")
+                else com.droiddeck.launcher.stores.rockstar.RockstarLaunch.prepare(app, id)
             }.getOrElse { JSONObject().put("ok", false).put("reason", "error-" + it.javaClass.simpleName) }
             "store-service" -> runCatching {
                 val root = com.droiddeck.launcher.runtime.LinuxRuntime.rootDir(app)
@@ -90,14 +121,16 @@ object StoreLaunchRequests {
                 else JSONObject().put("ok", false).put("reason", "service-unavailable")
             }.getOrElse { JSONObject().put("ok", false).put("reason", "error-" + it.javaClass.simpleName) }
             "rockstar-exited" -> {
-                if (lastLaunched == (Store.ROCKSTAR to request.optString("id"))) lastLaunched = null
-                JSONObject().put("ok", true)
+                val id = request.optString("id")
+                val allowed = launched(Store.ROCKSTAR, id)
+                if (allowed) hostLaunch.finish(Store.ROCKSTAR, id)
+                JSONObject().put("ok", allowed)
             }
             "ubisoft-launch" -> {
                 val id = request.optString("id")
                 if (id.isEmpty()) JSONObject().put("ok", false).put("reason", "no-id")
+                else if (!launched(Store.UBISOFT, id)) JSONObject().put("ok", false).put("reason", "not-launched")
                 else {
-                    lastLaunched = Store.UBISOFT to id
                     runCatching { com.droiddeck.launcher.stores.ubisoft.UbisoftLaunch.prepare(app, id) }
                         .getOrElse { JSONObject().put("ok", false).put("reason", it.javaClass.simpleName) }
                 }
@@ -106,8 +139,8 @@ object StoreLaunchRequests {
                 val store = Store.byId(request.optString("store"))
                 val id = request.optString("id")
                 if (store == null || id.isEmpty()) JSONObject().put("ok", false).put("reason", "no-game")
+                else if (!launched(store, id)) JSONObject().put("ok", false).put("reason", "not-launched")
                 else {
-                    lastLaunched = store to id
                     CloudSaves.markDirty(app, store, id)
                     CloudSaves.downloadOrDefer(app, store, id).let { JSONObject().put("ok", it.ok).put("result", it.result).put("files", it.files).put("reason", it.reason) }
                 }
@@ -115,8 +148,9 @@ object StoreLaunchRequests {
             "cloud-up" -> {
                 val store = Store.byId(request.optString("store"))
                 val id = request.optString("id")
-                if (store != null && id.isNotEmpty()) Thread({ CloudSaves.uploadDirty(app, store, id, "exit") }, "cloud-up").start()
-                JSONObject().put("ok", true)
+                val allowed = store != null && id.isNotEmpty() && launched(store, id)
+                if (allowed) Thread({ CloudSaves.uploadDirty(app, store!!, id, "exit") }, "cloud-up").start()
+                JSONObject().put("ok", allowed)
             }
             "open-url" -> {
                 val url = request.optString("url")

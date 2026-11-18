@@ -1639,6 +1639,19 @@ class SessionService : Service() {
             mainHandler.postDelayed(flushSteamGame, GAME_LAUNCH_RETRY_MS)
             return
         }
+        com.droiddeck.launcher.stores.StoreLaunchRequests.clearHostLaunch()
+        runCatching {
+            com.droiddeck.launcher.frontend.AddedGames.scan(this)
+                .firstOrNull { it.gameId.toString() == gameId || it.steamAppId?.toString() == gameId }
+                ?.let { selected ->
+                    val sidecar = com.droiddeck.launcher.stores.StoreGameSidecar.read(selected.folder)
+                    val store = sidecar?.store
+                    val storeId = sidecar?.id
+                    if (store != null && !storeId.isNullOrBlank()) {
+                        com.droiddeck.launcher.stores.StoreLaunchRequests.noteHostLaunch(store, storeId, gameId)
+                    }
+                }
+        }.onFailure { Log.w(TAG, "could not map Steam launch to store game", it) }
         pendingSteamGameId = null
         pendingSteamGameGeneration = -1
         pendingSteamGameExitWatchToken = -1
@@ -1739,6 +1752,7 @@ class SessionService : Service() {
 
     private fun clearActiveScreenEffectsProfile(gameId: String, gen: Int, token: Int) {
         if (token != gameExitWatchToken || gen != sessionGen || !SessionState.running || SessionState.stopRequested) return
+        com.droiddeck.launcher.stores.StoreLaunchRequests.finishHostSteamGame(gameId)
         val gameProfileId = SessionPrefs.screenEffectsProfileId(MODE_STEAM, gameId, null)
         if (SessionPrefs.activeScreenEffectsProfileId(this) != gameProfileId) return
         SessionPrefs.setActiveScreenEffectsProfile(this, null)
