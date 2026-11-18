@@ -34,7 +34,9 @@ object StoreLaunchRequests {
             observer?.stopWatching()
             val root = dir(app)
             root.deleteRecursively()
-            hostLaunch.reset()
+            // StoreLaunch.prepare() may run immediately before SessionService
+            // starts the guest; preserve that host-issued launch grant here.
+            // stop() and the grant's lifetime handle stale permissions.
             val req = File(root, "req").apply { mkdirs() }
             File(root, "resp").mkdirs()
             @Suppress("DEPRECATION")
