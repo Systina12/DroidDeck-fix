@@ -194,6 +194,17 @@ class EaTest {
         assertTrue(EaLsx.authCodeAllowed(EaAuth.CLIENT_ID, "signin service.atom"))
     }
 
+    @Test fun lsxReturnsOnlyTheAlreadyPreparedUnexpiredToken() {
+        val fresh = EaLsx.Game("offer", "content", "Game", "1", "en_US", null, 0,
+            token = "prepared", tokenExpiresAt = System.currentTimeMillis() + 60_000)
+        assertEquals("", EaLsx.preparedToken(false, fresh))
+        assertEquals("prepared", EaLsx.preparedToken(true, fresh))
+        val expired = EaLsx.Game("offer", "content", "Game", "1", "en_US", null, 0,
+            token = "expired", tokenExpiresAt = System.currentTimeMillis() - 1)
+        assertEquals("", EaLsx.preparedToken(true, expired))
+        assertEquals("", EaLsx.preparedToken(true, null))
+    }
+
     @Test fun aSessionFromAnOlderLaunchCannotBecomeTrusted() {
         val old = EaLsx.Session(java.net.Socket(), java.io.ByteArrayOutputStream(), true)
         EaLsx.generation++

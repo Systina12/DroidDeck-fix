@@ -347,6 +347,9 @@ object EaLsx {
 
     private val AUTH_CODE_SCOPES = setOf("signin", "service.atom", "dp.client.default")
 
+    internal fun preparedToken(trusted: Boolean, prepared: Game?): String =
+        if (trusted) prepared?.validToken.orEmpty() else ""
+
     private fun now() = LocalDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
 
     private fun answer(session: Session, m: Message): String? {
@@ -410,7 +413,7 @@ object EaLsx {
             }
             // The prepared game already has its launch-scoped token. Never mint a
             // fresh four-hour account token in response to a loopback request.
-            "GetAuthToken" -> tag("AuthToken", "value" to if (session.trusted) g?.validToken.orEmpty() else "")
+            "GetAuthToken" -> tag("AuthToken", "value" to preparedToken(session.trusted, g))
             "RequestLicense" -> {
                 val token = who?.takeIf { session.trusted }?.license(g?.contentId.orEmpty(), m.attrs["RequestTicket"].orEmpty(), m.attrs["TicketEngine"].orEmpty())?.takeIf { session.trusted }.orEmpty()
                 tag("RequestLicenseResponse", "License" to token)
